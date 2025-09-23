@@ -1,217 +1,155 @@
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
-const readline = require('readline');
+// Import required dependencies
+import { GoogleGenAI } from "@google/genai";
+import readlineSync from 'readline-sync';
+import { exec } from "child_process";
+import { promisify } from "util";
+import os from 'os';
 
-// Configuration
-const GEMINI_API_KEY= "AIzaSyCXSUSOWN8dBDcHpbGcUuYUEedD0KCI8FI"
+// Get current operating system platform
+const platform = os.platform();
 
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
-// Main function to start the application
-async function startGenerator() {
-  console.log('🎯 AI Code Generator');
-  console.log('━━━━━━━━━━━━━━━━━━━━━━');
-  
-  // Check if API key is set
-  if (!GEMINI_API_KEY) {
-    console.error('❌ Error: GEMINI_API_KEY environment variable not set');
-    console.log('💡 Please set your Gemini API key:');
-    console.log('   export GEMINI_API_KEY="your-api-key-here"');
-    console.log('   Or on Windows: set GEMINI_API_KEY=your-api-key-here');
-    return;
-  }
+// Convert exec to promise-based function
+const asyncExecute = promisify(exec);
 
-  // Get user input
-  const userInput = await askUserInput();
-  
-  if (!userInput || userInput.trim() === '') {
-    console.log('❌ Please provide a description of what you want to build.');
-    return;
-  }
+// Store conversation history for AI context
+const History = [];
 
-  console.log(`📝 Building: "${userInput}"`);
-  
-  try {
-    // Generate code using Gemini AI
-    const generatedCode = await generateWithGemini(userInput);
-    
-    // Parse the response to extract files
-    const files = parseGeneratedCode(generatedCode);
-    
-    if (Object.keys(files).length === 0) {
-      console.error('❌ Could not extract files from AI response');
-      return;
-    }
+// Gemini AI configuration
+const GEMINI_API_KEY = "use your own api key here dawwwg";
+const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-    // Create project folder and files
-    const projectName = createProjectName(userInput);
-    createProjectFiles(projectName, files);
-    
-    // Success message
-    console.log('\n✅ Project created successfully!');
-    console.log(`📁 Location: ./${projectName}/`);
-    console.log(`📄 Files: ${Object.keys(files).join(', ')}`);
-    console.log('\n🌐 To view your app:');
-    console.log(`   cd ${projectName}`);
-    console.log(`   open index.html`);
-    
-  } catch (error) {
-    console.error('❌ Error:', error.message);
-  }
-}
+// Execute shell commands asynchronously
+async function executeCommand({command}) {
+    try {
+        const {stdout, stderr} = await asyncExecute(command);
 
-// Function to get user input
-function askUserInput() {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
-
-  return new Promise((resolve) => {
-    rl.question('What would you like to build? (e.g., "calculator", "todo app", "weather widget"): ', (answer) => {
-      rl.close();
-      resolve(answer);
-    });
-  });
-}
-
-// Function to create the prompt for Gemini AI
-function createGeminiPrompt(userRequest) {
-  return `Create a complete web application: ${userRequest}
-
-Please provide the code in exactly this format:
-
-===HTML===
-[Complete HTML code here]
-===HTML===
-
-===CSS===
-[Complete CSS code here]  
-===CSS===
-
-===JS===
-[Complete JavaScript code here]
-===JS===
-
-Requirements:
-- Make it fully functional and interactive
-- Use modern, clean design
-- Make it responsive
-- Use only vanilla HTML, CSS, and JavaScript
-- No external libraries
-- Make sure all files work together perfectly`;
-}
-
-// Function to call Gemini API
-async function generateWithGemini(userRequest) {
-  console.log('🤖 Generating code with AI...');
-  
-  const prompt = createGeminiPrompt(userRequest);
-  
-  try {
-    const response = await axios.post(
-      `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
-      {
-        contents: [{
-          parts: [{ text: prompt }]
-        }]
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json'
+        if (stderr) {
+            return `Error: ${stderr}`;
         }
-      }
-    );
 
-    if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-      return response.data.candidates[0].content.parts[0].text;
-    } else {
-      throw new Error('Invalid response from Gemini API');
+        return `Success: ${stdout || 'Task executed completely'}`;
+    } catch (error) {
+        return `Error: ${error.message}`;
     }
-  } catch (error) {
-    if (error.response?.data) {
-      console.error('API Error:', error.response.data);
-    }
-    throw new Error('Failed to generate code: ' + error.message);
-  }
 }
 
-// Function to parse the AI response and extract files
-function parseGeneratedCode(response) {
-  const files = {};
-  
-  // Parse HTML
-  const htmlMatch = response.match(/===HTML===([\s\S]*?)===HTML===/);
-  if (htmlMatch) {
-    files['index.html'] = htmlMatch[1].trim();
-  }
+// Define tool schema for AI function calling
+const executeCommandDeclaration = {
+    name: "executeCommand",
+    description: "Execute a single terminal/shell command. A command can be to create a folder, file, write on a file, edit the file or delete the file",
+    parameters: {
+        type: 'OBJECT',
+        properties: {
+            command: {
+                type: 'STRING',
+                description: 'It will be a single terminal command. Ex: "mkdir calculator"'
+            },
+        },
+        required: ['command']   
+    }
+};
 
-  // Parse CSS  
-  const cssMatch = response.match(/===CSS===([\s\S]*?)===CSS===/);
-  if (cssMatch) {
-    files['style.css'] = cssMatch[1].trim();
-  }
+// Map available tools for AI to use
+const availableTools = {
+   executeCommand
+};
 
-  // Parse JavaScript
-  const jsMatch = response.match(/===JS===([\s\S]*?)===JS===/);
-  if (jsMatch) {
-    files['script.js'] = jsMatch[1].trim();
-  }
-
-  // Fallback parsing if markers not found
-  if (Object.keys(files).length === 0) {
-    console.log('⚠️ Using fallback parsing...');
-    
-    const codeBlocks = response.match(/```[\s\S]*?```/g) || [];
-    
-    codeBlocks.forEach((block) => {
-      const content = block.replace(/```\w*\n?/, '').replace(/```$/, '').trim();
-      
-      if (content.includes('<!DOCTYPE') || content.includes('<html')) {
-        files['index.html'] = content;
-      } else if (content.includes('body {') || content.includes('{') && content.includes('}')) {
-        files['style.css'] = content;
-      } else if (content.includes('function') || content.includes('document.') || content.includes('const ')) {
-        files['script.js'] = content;
-      }
+// Main AI agent function that handles user requests
+async function runAgent(userProblem) {
+    // Add user input to conversation history
+    History.push({
+        role: 'user',
+        parts: [{text: userProblem}]
     });
-  }
 
-  return files;
+    while (true) {
+        // Generate AI response with tool capabilities
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: History,
+            config: {
+                systemInstruction: `You are an Website builder expert. You have to create the frontend of the website by analysing the user Input.
+                You have access of tool, which can run or execute any shell or terminal command.
+
+                Current user operation system is: ${platform}
+                Give command to the user according to its operating system support.
+
+                <-- What is your job -->
+                1: Analyse the user query to see what type of website the want to build
+                2: Give them command one by one , step by step
+                3: Use available tool executeCommand
+
+                // Now you can give them command in following below
+                1: First create a folder, Ex: mkdir "calulator"
+                2: Inside the folder, create index.html , Ex: touch "calculator/index.html"
+                3: Then create style.css same as above
+                4: Then create script.js
+                5: Then write a code in html file
+
+                You have to provide the terminal or shell command to user, they will directly execute it
+
+                `,
+                tools: [{
+                    functionDeclarations: [executeCommandDeclaration]
+                }],
+            },
+        });
+
+        // Check if AI wants to use a tool
+        if (response.functionCalls && response.functionCalls.length > 0) {
+            console.log(response.functionCalls[0]);
+            const {name, args} = response.functionCalls[0];
+
+            // Execute the requested tool
+            const funCall = availableTools[name];
+            const result = await funCall(args);
+
+            // Prepare function response for AI
+            const functionResponsePart = {
+                name: name,
+                response: {
+                    result: result,
+                },
+            };
+
+            // Add model's function call to history
+            History.push({
+                role: "model",
+                parts: [
+                    {
+                        functionCall: response.functionCalls[0],
+                    },
+                ],
+            });
+
+            // Add function result to history
+            History.push({
+                role: "user",
+                parts: [
+                    {
+                        functionResponse: functionResponsePart,
+                    },
+                ],
+            });
+        } else {
+            // Add AI response to history and display it
+            History.push({
+                role: 'model',
+                parts: [{text: response.text}]
+            });
+            console.log(response.text);
+            break;
+        }
+    }
 }
 
-// Function to create a clean project name
-function createProjectName(input) {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 30) || 'my-project';
-}
-
-// Function to create project folder and files
-function createProjectFiles(projectName, files) {
-  const projectPath = path.join(process.cwd(), projectName);
-  
-  // Create project directory
-  if (!fs.existsSync(projectPath)) {
-    fs.mkdirSync(projectPath, { recursive: true });
-  }
-
-  // Write all files
-  Object.entries(files).forEach(([fileName, content]) => {
-    const filePath = path.join(projectPath, fileName);
-    fs.writeFileSync(filePath, content, 'utf8');
-    console.log(`✓ Created ${fileName}`);
-  });
+// Main application entry point
+async function main() {
+    console.log("I am Devlin: let's create a website");
+    const userProblem = readlineSync.question("Ask me anything--> ");
+    await runAgent(userProblem);
+    main(); // Restart for continuous interaction
 }
 
 // Start the application
-if (require.main === module) {
-  startGenerator().catch(error => {
-    console.error('❌ Fatal error:', error.message);
-    process.exit(1);
-  });
-}
-
-// test prompt - build me a simple portfolio website i am a mobile developer who knows react native and flutter i am a professional with trained experience of 2+ years
+main();
